@@ -31,15 +31,34 @@ Runs entirely in the browser. No backend, no build step, no dependencies.
 
 ## Under the hood
 
-The three insights XML endpoints don't send permissive CORS headers, so a
-public CORS proxy (`api.allorigins.win/raw`) relays the requests. That means
-the tool works from any origin — GitHub Pages, Netlify, a local file, or a
-pinned tab.
+**Fetch order (per year):**
 
-If the proxy is ever unavailable, the tool won't load feeds. There's no
-embedded fallback data in this build — it's a live-only viewer.
+1. `./data/{year}.xml` — same-origin, instant, no CORS. Populated by
+   `fetch-feeds.sh` (see below).
+2. Public CORS proxy chain (`codetabs → allorigins/raw → corsproxy.io →
+   allorigins/get`) — used only if the local file isn't present.
+3. Direct cross-origin fetch — the "direct" data-source option; usually
+   fails from GitHub Pages due to missing CORS headers.
+
+The status bar reports which source each year loaded from
+(e.g. `Loaded 476 articles (3 local).`).
+
+## Caching the feeds locally
+
+Run once (and any time you want to refresh):
+
+```bash
+bash fetch-feeds.sh
+```
+
+This downloads the three year feeds into `./data/2024.xml`, `2025.xml`,
+`2026.xml`. Commit + push those files and the deployed tool will load them
+same-origin — instant, no proxy, no CORS.
+
+To refresh only one year: `bash fetch-feeds.sh 2026`.
 
 ## File layout
 
 Single `index.html` file. Everything is inline — no external CSS, no bundler,
-no dependencies except the browser's built-in DOM and Fetch APIs.
+no dependencies except the browser's built-in DOM and Fetch APIs. Cached
+year feeds live in `./data/`.

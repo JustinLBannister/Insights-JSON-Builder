@@ -950,20 +950,54 @@
     document.getElementById('articles-column').innerHTML = '<div class="loading">Loading feeds…</div>';
     Promise.all(years.map(function (y) {
       var targetUrl = 'https://www.rbccm.com/en/insights/data/' + y + '-insights';
-      var url = useProxy ? 'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl) : targetUrl;
-      return fetch(url)
-        .then(function (r) {
-          if (!r.ok) return { year: y, xml: '', error: 'HTTP ' + r.status };
-          return r.text().then(function (xml) { return { year: y, xml: xml, error: null }; });
-        })
-        .catch(function (err) {
-          return { year: y, xml: '', error: err && err.message ? err.message : 'Network / CORS blocked' };
+      var localUrl = './data/' + y + '.xml';
+      var proxies = [
+        'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(targetUrl),
+        'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl),
+        'https://corsproxy.io/?url=' + encodeURIComponent(targetUrl),
+        'https://api.allorigins.win/get?url=' + encodeURIComponent(targetUrl)
+      ];
+      // Local-first: try same-origin ./data/{year}.xml before any network call.
+      // Populated by fetch-feeds.sh; instant load, no CORS. Falls through to
+      // proxy chain (or direct fetch) if the file isn't present.
+      function tryLocal() {
+        return fetch(localUrl).then(function (r) {
+          if (!r.ok) throw new Error('local file ' + localUrl + ' returned HTTP ' + r.status);
+          return r.text();
+        }).then(function (body) {
+          if (!body || body.indexOf('<news>') === -1) throw new Error('local file empty or invalid');
+          return body;
+        });
+      }
+      function tryProxy(idx) {
+        if (!useProxy) return fetch(targetUrl).then(function (r) { return r.ok ? r.text() : ''; });
+        if (idx >= proxies.length) return Promise.reject(new Error('all proxies failed'));
+        return fetch(proxies[idx]).then(function (r) {
+          if (!r.ok) throw new Error('proxy ' + (idx + 1) + ' returned HTTP ' + r.status);
+          return r.text();
+        }).then(function (body) {
+          if (proxies[idx].indexOf('allorigins.win/get') !== -1) {
+            try { return JSON.parse(body).contents || ''; } catch (e) { return ''; }
+          }
+          return body;
+        }).catch(function () { return tryProxy(idx + 1); });
+      }
+      return tryLocal()
+        .then(function (xml) { return { year: y, xml: xml, error: null, source: 'local' }; })
+        .catch(function () {
+          return tryProxy(0)
+            .then(function (xml) { return { year: y, xml: xml, error: null, source: useProxy ? 'proxy' : 'direct' }; })
+            .catch(function (err) {
+              return { year: y, xml: '', error: err && err.message ? err.message : 'Network / CORS blocked', source: 'failed' };
+            });
         });
     })).then(function (feeds) {
       var articles = [];
       var errors = [];
+      var sourceBreakdown = { local: 0, proxy: 0, direct: 0, failed: 0 };
       feeds.forEach(function (f) {
         if (f.error) errors.push(f.year + ' → ' + f.error);
+        sourceBreakdown[f.source] = (sourceBreakdown[f.source] || 0) + 1;
         parseNews(f.xml, f.year).forEach(function (a) { articles.push(a); });
       });
       if (articles.length === 0) {
@@ -976,7 +1010,12 @@
       }
       state.articles = articles;
       state.articles.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
-      var statusMsg = 'Loaded ' + state.articles.length + ' articles from ' + label + '.';
+      var sourceBits = [];
+      if (sourceBreakdown.local) sourceBits.push(sourceBreakdown.local + ' local');
+      if (sourceBreakdown.proxy) sourceBits.push(sourceBreakdown.proxy + ' proxy');
+      if (sourceBreakdown.direct) sourceBits.push(sourceBreakdown.direct + ' direct');
+      var statusMsg = 'Loaded ' + state.articles.length + ' articles' +
+        (sourceBits.length ? ' (' + sourceBits.join(', ') + ')' : '') + '.';
       if (errors.length) statusMsg += ' Partial — ' + errors.length + ' feed(s) failed: ' + errors.join('; ');
       setSourceStatus(statusMsg);
       renderStats();
