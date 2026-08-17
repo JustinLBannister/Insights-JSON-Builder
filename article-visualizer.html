@@ -1053,6 +1053,20 @@
       });
   }
 
+  /* Absolutize a URL - if it starts with "/" it's a site-relative
+     path (e.g. "/assets/rbccm/images/foo.jpg") and needs the
+     production hostname bolted on so pasted URLs work outside
+     rbccm.com. Absolute URLs (http://, https://, //) pass through
+     untouched. */
+  var RBCCM_PROD_HOST = 'https://www.rbccm.com';
+  function absolutizeUrl(url) {
+    if (!url) return '';
+    var s = String(url).trim();
+    if (/^(https?:)?\/\//i.test(s)) return s;   // already absolute
+    if (s.charAt(0) === '/') return RBCCM_PROD_HOST + s;
+    return s;   // no leading slash - leave alone, probably data or hash
+  }
+
   function copyTextToClipboard(text, successMsg) {
     var done = function () { showToast(successMsg || 'Copied'); };
     var fail = function () { showToast('Copy failed - select and copy manually'); };
@@ -1229,12 +1243,14 @@
       } else if (btn.classList.contains('js-copy-image-url')) {
         var imgUrl2 = (a.nodes && (a.nodes.thumbnail || a.nodes.image)) || '';
         if (!imgUrl2) { showToast('No image URL on this article'); return; }
-        copyTextToClipboard(imgUrl2, 'Copied image URL');
+        /* Absolutize so pasted URLs work anywhere (email, Slack,
+           etc.) - not just when the recipient is browsing rbccm.com. */
+        copyTextToClipboard(absolutizeUrl(imgUrl2), 'Copied image URL');
         btn.classList.add('copied');
         setTimeout(function () { btn.classList.remove('copied'); }, 1200);
       } else if (btn.classList.contains('js-copy-article-url')) {
         if (!a.link) { showToast('No article URL'); return; }
-        copyTextToClipboard(a.link, 'Copied article URL');
+        copyTextToClipboard(absolutizeUrl(a.link), 'Copied article URL');
         btn.classList.add('copied');
         setTimeout(function () { btn.classList.remove('copied'); }, 1200);
       }
