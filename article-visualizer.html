@@ -4,6 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Article Visualizer</title>
+  <!-- JSZip: enables bulk banner-image ZIP download.
+       Loaded from cdnjs; ~15KB gzipped, only used when the user
+       clicks "Download images (ZIP)" on a selection. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <style>
     * { box-sizing: border-box; }
     html, body {
@@ -345,6 +349,55 @@
     .badge.type-video { background: #FCEBEB; color: #791F1F; }
     .badge.type-text  { background: #F1EFE8; color: #444441; }
     .badge.year       { background: #F5F5F5; color: #454545; font-family: monospace; }
+
+    /* Per-article action row: Download banner + Copy URL. Lives
+       inside the card's body under the tags. Buttons stop click
+       propagation so clicking them doesn't toggle the card's
+       checkbox selection. */
+    .article-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+      flex-wrap: wrap;
+    }
+    .article-actions button {
+      appearance: none;
+      -webkit-appearance: none;
+      background: #ffffff;
+      border: 1px solid #C8D3E0;
+      color: #003168;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 5px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    .article-actions button:hover:not(:disabled) { background: #F1F7FE; border-color: #003168; }
+    .article-actions button:disabled { color: #A8A8A8; cursor: not-allowed; border-color: #E0E0E0; }
+    .article-actions button.copied { background: #E6F5EA; border-color: #2E844A; color: #1D5C31; }
+
+    /* Toast for transient status ("Copied URL", "Downloaded",
+       "Zipping 5 images…"). Anchored bottom-right, fades out. */
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #003168;
+      color: #ffffff;
+      padding: 10px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 180ms ease, transform 180ms ease;
+      pointer-events: none;
+      z-index: 1000;
+      max-width: 320px;
+    }
+    .toast.is-visible { opacity: 1; transform: translateY(0); }
     .loading, .empty-state {
       text-align: center;
       padding: 60px 20px;
@@ -579,10 +632,15 @@
         </div>
         <div class="selected-actions">
           <button class="btn" id="export-json" disabled>Export JSON</button>
-          <button class="btn btn-secondary" id="clear-all" disabled>Clear all</button>
+          <button class="btn btn-secondary" id="download-zip" disabled title="Download banner images for all selected articles as a ZIP file">Download images (ZIP)</button>
+          <button class="btn btn-secondary" id="download-csv" disabled title="Download all selected article fields as a CSV spreadsheet">Download CSV</button>
           <button class="btn btn-secondary" id="copy-json" disabled>Copy JSON</button>
+          <button class="btn btn-secondary" id="clear-all" disabled>Clear all</button>
           <textarea class="json-preview" id="json-preview" readonly rows="10"></textarea>
         </div>
+        <!-- Live toast for download / copy status. Injected once,
+             reused for every message. -->
+        <div class="toast" id="toast" role="status" aria-live="polite"></div>
       </div>
     </div>
   </div>
@@ -785,6 +843,17 @@
         var titleLink = a.link ? '<a href="' + escapeHtml(a.link) + '" target="_blank" rel="noopener">' + escapeHtml(a.title) + '</a>' : escapeHtml(a.title);
         var checked = state.selected[a.matchKey] ? 'checked' : '';
         var sel = state.selected[a.matchKey] ? ' is-selected' : '';
+        // Banner image URL lives in the article's <thumbnail> node.
+        // Fall back to <image> in case some feeds use a different tag.
+        var bannerUrl = (a.nodes && (a.nodes.thumbnail || a.nodes.image)) || '';
+        var actions = '<div class="article-actions">' +
+          '<button type="button" class="js-download-image" data-key="' + escapeHtml(a.matchKey) + '"' +
+              (bannerUrl ? '' : ' disabled title="No banner image on this article"') + '>Download banner</button>' +
+          '<button type="button" class="js-copy-image-url" data-key="' + escapeHtml(a.matchKey) + '"' +
+              (bannerUrl ? '' : ' disabled title="No banner image on this article"') + '>Copy image URL</button>' +
+          '<button type="button" class="js-copy-article-url" data-key="' + escapeHtml(a.matchKey) + '"' +
+              (a.link ? '' : ' disabled title="No article link"') + '>Copy article URL</button>' +
+        '</div>';
         html += '<label class="article-card' + sel + '" data-key="' + escapeHtml(a.matchKey) + '">' +
           '<input type="checkbox" class="article-check" ' + checked + ' data-key="' + escapeHtml(a.matchKey) + '">' +
           '<div class="article-body">' +
@@ -792,6 +861,7 @@
             '<div class="article-sub">' + escapeHtml(formatDate(a.ts) + (formatDuration(a) ? ' · ' + formatDuration(a) : '')) + '</div>' +
             (a.desc ? '<p class="article-desc">' + escapeHtml(a.desc) + '</p>' : '') +
             (pills ? '<div class="article-tags">' + pills + '</div>' : '') +
+            actions +
           '</div>' +
           '<div class="badges">' +
             '<span class="badge type-' + a.type + '">' + capitalize(a.type) + '</span>' +
@@ -811,6 +881,8 @@
     document.getElementById('export-json').disabled = keys.length === 0;
     document.getElementById('clear-all').disabled = keys.length === 0;
     document.getElementById('copy-json').disabled = keys.length === 0;
+    document.getElementById('download-zip').disabled = keys.length === 0;
+    document.getElementById('download-csv').disabled = keys.length === 0;
     if (keys.length === 0) {
       list.innerHTML = '<div class="selected-empty">Nothing selected yet. Tick articles on the left to see all their data here.</div>';
       return;
@@ -903,6 +975,209 @@
     preview.value = '';
   }
 
+
+  /* ==========================================================
+     Downloads + clipboard helpers
+     ==========================================================
+     - Copy URL to clipboard (image URL or article URL)
+     - Download a single banner image (blob-fetch with anchor fallback)
+     - Download all selected banners as a ZIP (uses JSZip from CDN)
+     - Download all selected article fields as a CSV
+     - Small transient toast for user feedback
+
+     Filename policy: keep whatever the original URL ends in
+     (e.g. "banner-image-name.jpg"). Riya can rename after saving
+     if she needs to; we don't rewrite. Preserves the source-of-truth
+     name so it's traceable back to the CMS.
+     ========================================================== */
+
+  var _toastTimer = null;
+  function showToast(msg) {
+    var t = document.getElementById('toast');
+    if (!t) return;
+    t.textContent = msg;
+    t.classList.add('is-visible');
+    if (_toastTimer) clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(function () { t.classList.remove('is-visible'); }, 2200);
+  }
+
+  /* Extract the original filename from a URL's path. Strips query
+     string / fragment. Falls back to "image" if unparseable. */
+  function filenameFromUrl(url) {
+    if (!url) return 'image';
+    try {
+      var u = new URL(url, window.location.href);
+      var last = u.pathname.split('/').filter(Boolean).pop();
+      return last || 'image';
+    } catch (e) {
+      var bare = String(url).split('?')[0].split('#')[0];
+      var seg = bare.split('/').filter(Boolean).pop();
+      return seg || 'image';
+    }
+  }
+
+  /* Force-download a file from a Blob. Programmatic anchor click
+     works cross-browser and honours the "download" attribute even
+     for cross-origin blobs. */
+  function saveBlob(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+  }
+
+  /* Fetch an image as a blob, then trigger download. Falls back to
+     opening the URL in a new tab (so the user can right-click save)
+     if fetch fails - typically a CORS block on an external CDN. */
+  function downloadImageByUrl(url, filename) {
+    if (!url) { showToast('No image URL on this article'); return; }
+    var name = filename || filenameFromUrl(url);
+    fetch(url)
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.blob();
+      })
+      .then(function (blob) {
+        saveBlob(blob, name);
+        showToast('Downloaded ' + name);
+      })
+      .catch(function () {
+        // Cross-origin block or network error - open in new tab so
+        // the user can save manually.
+        window.open(url, '_blank', 'noopener');
+        showToast('Opened in new tab (right-click to save)');
+      });
+  }
+
+  function copyTextToClipboard(text, successMsg) {
+    var done = function () { showToast(successMsg || 'Copied'); };
+    var fail = function () { showToast('Copy failed - select and copy manually'); };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done).catch(fail);
+    } else {
+      // Fallback for insecure contexts (http://): temporary textarea.
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.top = '-1000px';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); done(); } catch (e) { fail(); }
+      document.body.removeChild(ta);
+    }
+  }
+
+  /* Bulk banner download as a single ZIP. Fetches every selected
+     article's thumbnail, adds to a JSZip archive, then triggers
+     one save. Skips articles with no thumbnail or fetch failure
+     (logs skipped count in the toast). */
+  function downloadSelectedAsZip() {
+    if (typeof JSZip === 'undefined') {
+      showToast('ZIP library not loaded - refresh and retry');
+      return;
+    }
+    var items = Object.keys(state.selected).map(function (k) { return state.selected[k]; });
+    if (!items.length) return;
+    var withImages = items.filter(function (a) {
+      return a.nodes && (a.nodes.thumbnail || a.nodes.image);
+    });
+    if (!withImages.length) {
+      showToast('None of the selected articles have banner images');
+      return;
+    }
+    var btn = document.getElementById('download-zip');
+    var original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Zipping…';
+    var zip = new JSZip();
+    var skipped = 0;
+    var usedNames = {};
+
+    Promise.all(withImages.map(function (a) {
+      var url = a.nodes.thumbnail || a.nodes.image;
+      return fetch(url).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.blob();
+      }).then(function (blob) {
+        // De-dupe filenames if two articles share one (rare but
+        // possible with reused hero images).
+        var base = filenameFromUrl(url);
+        var name = base;
+        var n = 1;
+        while (usedNames[name]) { name = base.replace(/(\.\w+)?$/, '-' + n + '$1'); n++; }
+        usedNames[name] = true;
+        zip.file(name, blob);
+      }).catch(function () { skipped++; });
+    })).then(function () {
+      return zip.generateAsync({ type: 'blob' });
+    }).then(function (blob) {
+      saveBlob(blob, 'article-banners.zip');
+      btn.disabled = false;
+      btn.textContent = original;
+      showToast('Downloaded ZIP (' + (withImages.length - skipped) + ' images' + (skipped ? ', ' + skipped + ' skipped' : '') + ')');
+    }).catch(function () {
+      btn.disabled = false;
+      btn.textContent = original;
+      showToast('ZIP build failed');
+    });
+  }
+
+  /* CSV export of selected articles. Uses the union of all node
+     keys across the selection as columns (so if only some articles
+     have "watchtime", every row still has that column). Escapes
+     per RFC 4180: wraps in quotes if the value contains a quote,
+     comma, or newline; doubles embedded quotes. */
+  function downloadSelectedAsCsv() {
+    var items = Object.keys(state.selected).map(function (k) { return state.selected[k]; })
+      .sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+    if (!items.length) return;
+
+    // Column order: put common human-readable fields first, then
+    // whatever else the feed provides, alphabetised.
+    var priorityCols = ['title', 'date', 'publishdate', 'link', 'description', 'thumbnail', 'image', 'category', 'type', 'region', 'topic', 'readtime', 'watchtime', 'author'];
+    var seen = {};
+    var allKeys = [];
+    items.forEach(function (a) {
+      Object.keys(a.nodes || {}).forEach(function (k) {
+        if (!seen[k]) { seen[k] = true; allKeys.push(k); }
+      });
+    });
+    var priorityInSet = priorityCols.filter(function (k) { return seen[k]; });
+    var remaining = allKeys.filter(function (k) { return priorityCols.indexOf(k) === -1; })
+      .sort();
+    var cols = priorityInSet.concat(remaining);
+
+    var esc = function (v) {
+      if (v == null) return '';
+      var s = String(v);
+      if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+      return s;
+    };
+
+    var header = cols.map(esc).join(',');
+    var rows = items.map(function (a) {
+      return cols.map(function (k) { return esc((a.nodes || {})[k]); }).join(',');
+    });
+    var csv = [header].concat(rows).join('\r\n');
+    var blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+    var stamp = new Date().toISOString().slice(0, 10);
+    saveBlob(blob, 'article-visualizer-selection-' + stamp + '.csv');
+    showToast('Downloaded CSV (' + items.length + ' articles)');
+  }
+
+  /* Article lookup by matchKey for per-card action handlers. */
+  function articleByKey(key) {
+    for (var i = 0; i < state.articles.length; i++) {
+      if (state.articles[i].matchKey === key) return state.articles[i];
+    }
+    return null;
+  }
+
+
   function bindControls() {
     document.getElementById('search').addEventListener('input', function (e) {
       state.filter.search = e.target.value.trim().toLowerCase();
@@ -931,6 +1206,39 @@
     document.getElementById('export-json').addEventListener('click', exportJson);
     document.getElementById('clear-all').addEventListener('click', clearAll);
     document.getElementById('copy-json').addEventListener('click', copyJson);
+
+    /* Bulk selection actions: ZIP + CSV. */
+    document.getElementById('download-zip').addEventListener('click', downloadSelectedAsZip);
+    document.getElementById('download-csv').addEventListener('click', downloadSelectedAsCsv);
+
+    /* Per-article action buttons (delegated). The three .js-*
+       buttons live inside the .article-card <label>, so we
+       preventDefault + stopPropagation to make sure the click
+       doesn't bubble into a checkbox toggle. */
+    document.getElementById('articles-column').addEventListener('click', function (e) {
+      var btn = e.target.closest && e.target.closest('button.js-download-image, button.js-copy-image-url, button.js-copy-article-url');
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var key = btn.getAttribute('data-key');
+      var a = articleByKey(key);
+      if (!a) return;
+      if (btn.classList.contains('js-download-image')) {
+        var imgUrl = (a.nodes && (a.nodes.thumbnail || a.nodes.image)) || '';
+        downloadImageByUrl(imgUrl);
+      } else if (btn.classList.contains('js-copy-image-url')) {
+        var imgUrl2 = (a.nodes && (a.nodes.thumbnail || a.nodes.image)) || '';
+        if (!imgUrl2) { showToast('No image URL on this article'); return; }
+        copyTextToClipboard(imgUrl2, 'Copied image URL');
+        btn.classList.add('copied');
+        setTimeout(function () { btn.classList.remove('copied'); }, 1200);
+      } else if (btn.classList.contains('js-copy-article-url')) {
+        if (!a.link) { showToast('No article URL'); return; }
+        copyTextToClipboard(a.link, 'Copied article URL');
+        btn.classList.add('copied');
+        setTimeout(function () { btn.classList.remove('copied'); }, 1200);
+      }
+    });
   }
 
   function setSourceStatus(msg, cls) {
