@@ -679,7 +679,7 @@
   function loadLive() {
     var years = [2024, 2025, 2026];
     return Promise.all(years.map(function (y) {
-      return fetch('https://www.rbccm.com/en/insights/data/' + y + '-insights')
+      return fetch('https://www.rbccm.com/en/insights/data/' + y + '-insights?qPagesize=1000')
         .then(function (r) { return r.ok ? r.text() : ''; })
         .catch(function () { return ''; })
         .then(function (xml) { return { year: y, xml: xml }; });
@@ -949,7 +949,7 @@
     setSourceStatus('Fetching ' + label + '…', 'is-loading');
     document.getElementById('articles-column').innerHTML = '<div class="loading">Loading feeds…</div>';
     Promise.all(years.map(function (y) {
-      var targetUrl = 'https://www.rbccm.com/en/insights/data/' + y + '-insights';
+      var targetUrl = 'https://www.rbccm.com/en/insights/data/' + y + '-insights?qPagesize=1000';
       var localUrl = './data/' + y + '.xml';
       var proxies = [
         'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(targetUrl),

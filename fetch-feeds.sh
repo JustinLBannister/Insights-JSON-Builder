@@ -27,12 +27,12 @@ mkdir -p "$DATA_DIR"
 YEARS=("${@:-2024 2025 2026}")
 
 for y in ${YEARS[@]}; do
-  url="https://www.rbccm.com/en/insights/data/${y}-insights"
+  url="https://www.rbccm.com/en/insights/data/${y}-insights?qPagesize=1000"
   out="${DATA_DIR}/${y}.xml"
   echo "→ ${y}: fetching ${url}"
   curl -fsSL -A "Mozilla/5.0 (JSON Builder cache)" "$url" -o "$out"
   size=$(wc -c < "$out" | tr -d ' ')
-  count=$(grep -c '<news>' "$out" || true)
+  count=$(grep -o '<news>' "$out" | wc -l | tr -d ' ')
   echo "   saved ${out} (${size} bytes, ${count} <news> items)"
 done
 
